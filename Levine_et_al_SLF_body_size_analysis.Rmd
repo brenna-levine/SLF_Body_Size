@@ -1,0 +1,817 @@
+---
+title: "R Notebook - Bigger Bad Bugs in the Big City: Effects of Urbanization on Invasive Spotted Lanternfly (Lycorma delicatula) Body Size - Levine et al."
+
+output:
+  word_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+First, load all necessary packages.
+```{r}
+#load packages
+library(tidyverse)
+library(hexbin)
+library(patchwork)
+library(RSQLite)
+library(lubridate)
+library(lme4)
+library(DHARMa)
+library(car)
+library(HLMdiag)
+library(MuMIn)
+library(lmerTest)
+
+```
+
+Then, import and format the data. 
+```{r}
+#read data from csv
+sizes <- read_csv("/Users/brennalevine/Desktop/SLF_body_size_ICB_ms/Levine_et_al_body_size.csv")
+
+#declare factors
+sizes$Sex <- factor(sizes$Sex)
+sizes$Bag_Code <- factor(sizes$Bag_Code)
+sizes$Measurer_Initials <- factor(sizes$Measurer_Initials)
+sizes$Site_Code <- factor(sizes$Site_Code)
+
+#omit NAs from data set
+sizes <- na.omit(sizes)
+
+#add new column calculating ratio of nose-abd to nose-wing
+sizes <- sizes %>%
+  mutate(length_ratio = `Nose-to-Abdomen-Tip-(mm)`/`Nose-To-Wing-Tip-(mm)`)
+
+#make new values numeric
+sizes$length_ratio <- as.numeric(sizes$length_ratio)
+
+#make sure nose-to-wingtip and %IP are numeric
+sizes$`Nose-To-Wing-Tip-(mm)` <- as.numeric(sizes$`Nose-To-Wing-Tip-(mm)`)
+sizes$`%IP-5KM` <- as.numeric(sizes$`%IP-5KM`)
+
+#use lubridate to format dates
+sizes$coll_date <- as.numeric(ymd(paste("2021", sizes$Month, sizes$Day, sep = "-")))
+
+#subset to male data set
+males <- sizes %>%
+  filter(Sex == 'M') %>%
+  select(Measurer_Initials, Site_Code, `Nose-To-Wing-Tip-(mm)`, `Nose-to-Abdomen-Tip-(mm)`, Latitude, length_ratio, coll_date, `%IP-5KM`, Bag_Code, Num_TOH, Altitude)
+
+#add columns for transformed outcome variables
+males$`Nose-To-Wing-Tip-(mm)-LOG` <- log10(males$`Nose-To-Wing-Tip-(mm)`)
+males$`Nose-to-Abdomen-Tip-(mm)-LOG` <- log10(males$`Nose-to-Abdomen-Tip-(mm)`)
+males$`Nose-To-Wing-Tip-(mm)-SQRT` <- sqrt(males$`Nose-To-Wing-Tip-(mm)`)
+males$`Nose-to-Abdomen-Tip-(mm)-SQRT` <- sqrt(males$`Nose-to-Abdomen-Tip-(mm)`)
+
+#subset to a female data set
+females <- sizes %>%
+  filter(Sex == 'F') %>%
+  select(Measurer_Initials, Site_Code, `Nose-To-Wing-Tip-(mm)`, `Nose-to-Abdomen-Tip-(mm)`, Latitude, length_ratio, coll_date, `%IP-5KM`, Bag_Code, Num_TOH, Altitude)
+
+#add columns for transformed outcome variables
+females$`Nose-To-Wing-Tip-(mm)-LOG` <- log10(females$`Nose-To-Wing-Tip-(mm)`)
+females$`Nose-to-Abdomen-Tip-(mm)-LOG` <- log10(females$`Nose-to-Abdomen-Tip-(mm)`)
+females$`Nose-To-Wing-Tip-(mm)-SQRT` <- sqrt(females$`Nose-To-Wing-Tip-(mm)`)
+females$`Nose-to-Abdomen-Tip-(mm)-SQRT` <- sqrt(females$`Nose-to-Abdomen-Tip-(mm)`)
+
+```
+Scale variables for males and females
+```{r}
+#add columns for scaled variables - MALES
+males$scaled_5KM <- as.numeric(scale(males$`%IP-5KM`, center = TRUE, scale = TRUE))
+males$scaled_NW <- as.numeric(scale(males$`Nose-To-Wing-Tip-(mm)`, center = TRUE, scale = TRUE))
+males$scaled_NA <- as.numeric(scale(males$`Nose-to-Abdomen-Tip-(mm)`, center = TRUE, scale = TRUE))
+males$scaled_LR <- as.numeric(scale(males$length_ratio, center = TRUE, scale = TRUE))
+males$scaledLAT <- as.numeric(scale(males$Latitude, center = TRUE, scale = TRUE))
+males$scaledLR <- as.numeric(scale(males$length_ratio, center = TRUE, scale = TRUE))
+males$coll_date_scaled <- as.numeric(scale(males$coll_date, center = TRUE, scale = TRUE))
+males$Num_TOH_scaled <- as.numeric(scale(males$Num_TOH, center = TRUE, scale = TRUE))
+males$Altitude_scaled <- as.numeric(scale(males$Altitude, center = TRUE, scale = TRUE))
+
+
+#add columns for scaled variables - FEMALES
+females$scaled_5KM <- as.numeric(scale(females$`%IP-5KM`, center = TRUE, scale = TRUE))
+females$scaled_NW <- as.numeric(scale(females$`Nose-To-Wing-Tip-(mm)`, center = TRUE, scale = TRUE))
+females$scaled_NA <- as.numeric(scale(females$`Nose-to-Abdomen-Tip-(mm)`, center = TRUE, scale = TRUE))
+females$scaled_LR <- as.numeric(scale(females$length_ratio, center = TRUE, scale = TRUE))
+females$scaledLAT <- as.numeric(scale(females$Latitude, center = TRUE, scale = TRUE))
+females$scaledLR <- as.numeric(scale(females$length_ratio, center = TRUE, scale = TRUE))
+females$coll_date_scaled <- as.numeric(scale(females$coll_date, center = TRUE, scale = TRUE))
+females$Num_TOH_scaled <- as.numeric(scale(females$Num_TOH, center = TRUE, scale= TRUE))
+females$Altitude_scaled <- as.numeric(scale(females$Altitude, center = TRUE, scale = TRUE))
+
+```
+
+Perform data visualization.
+```{r}
+plot_sex_sizes <- ggplot(data = sizes, mapping = aes(x = Sex, y = `Nose-To-Wing-Tip-(mm)`, color = Sex)) +
+  geom_boxplot(color = "black") +
+  geom_jitter(alpha = 0.3) +
+  scale_color_manual(values = c("F" = "red", "M" = "blue")) +
+  guides(color = "none") +
+  labs(x = "Sex", y = "Body Length (mm)") +
+  theme_classic() +
+  theme(panel.grid = element_blank())
+
+# Save the plot as a 600 DPI PNG file
+ggsave("plot_sex_sizes_600dpi.png", plot = plot_sex_sizes, dpi = 600, width = 8, height = 6, units = "in")
+
+# Calculate mean and standard deviation for each sex
+summary_stats <- sizes %>%
+  group_by(Sex) %>%
+  summarise(
+    mean_length = mean(`Nose-To-Wing-Tip-(mm)`, na.rm = TRUE),
+    sd_length = sd(`Nose-To-Wing-Tip-(mm)`, na.rm = TRUE)
+  )
+
+print(summary_stats)
+
+
+
+```
+#Evaluate correlation between altitude and urbanization.
+```{r}
+# Correlation between altitude and urbanization - overall
+corr_altitude_urbanization <- cor.test(sizes$Altitude, sizes$`%IP-5KM`)
+print(corr_altitude_urbanization)
+
+# Correlation between altitude and urbanization - MALES AND FEMALES
+male_corr_altitude_urbanization <- cor.test(males$Altitude, males$`%IP-5KM`)
+female_corr_altitude_urbanization <- cor.test(females$Altitude, females$`%IP-5KM`)
+
+print(male_corr_altitude_urbanization)
+print(female_corr_altitude_urbanization)
+
+#evaluate correlation between altitude/urbanization and nose-to-wingtip length - MALES 
+male_corr_altitude_bodylength <- cor.test(males$Altitude, males$`Nose-To-Wing-Tip-(mm)`)
+male_corr_urbanization_bodylength <- cor.test(males$`%IP-5KM`, males$`Nose-To-Wing-Tip-(mm)`)
+                                              
+print(male_corr_altitude_bodylength)
+print(male_corr_urbanization_bodylength)
+
+#evaluate correlation between altitude/urbanization and nose-to-wingtip length for FEMALES
+female_corr_altitude_bodylength <- cor.test(females$Altitude, females$`Nose-To-Wing-Tip-(mm)`)
+female_corr_urbanization_bodylength <- cor.test(females$`%IP-5KM`, females$`Nose-To-Wing-Tip-(mm)`)
+                                              
+print(female_corr_altitude_bodylength)
+print(female_corr_urbanization_bodylength)
+
+```
+
+#Compare male and female body length
+```{r}
+# T-test for body length
+length_ttest <- t.test(females$`Nose-To-Wing-Tip-(mm)`, males$`Nose-To-Wing-Tip-(mm)`, var.equal = FALSE)
+print(length_ttest)
+
+# Calculate mean and standard deviation for body length for males
+male_summary <- males %>%
+  summarise(
+    Mean_Length_M = mean(`Nose-To-Wing-Tip-(mm)`, na.rm = TRUE),
+    SD_Length_M = sd(`Nose-To-Wing-Tip-(mm)`, na.rm = TRUE),
+  )
+
+# Calculate mean and standard deviation for weight and Nose-to-Wingtip length for females
+female_summary <- females %>%
+  summarise(
+    Mean_Length_F = mean(`Nose-To-Wing-Tip-(mm)`, na.rm = TRUE),
+    SD_Length_F = sd(`Nose-To-Wing-Tip-(mm)`, na.rm = TRUE),
+  )
+
+print(male_summary)
+print(female_summary)
+
+```
+
+Data Visualization for body length.
+```{r}
+###### males
+# Plot the relationship with a scatter plot
+ggplot(males, aes(x = `%IP-5KM`, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(x = "% Impervious Surface", y = "Body Length (mm)",
+       title = "Males: % Impervious Surface vs. Body Length") +
+  theme_minimal()
+
+# Plot the relationship with a scatter plot
+ggplot(males, aes(x = `Latitude`, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(x = "Latitude", y = "Body Length (mm)",
+       title = "Males: Latitude vs. Body Length") +
+  theme_minimal()
+
+#males
+# Plot the relationship with a scatter plot
+ggplot(males, aes(x = `Altitude`, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(x = "Altitude", y = "Body Length (mm)",
+       title = "Males: Altitude vs. Body Length") +
+  theme_minimal()
+
+
+#females
+# Plot the relationship with a scatter plot
+ggplot(females, aes(x = `%IP-5KM`, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(x = "% Impervious Surface", y = "Body Length (mm)",
+       title = "Females: % Impervious Surface vs. Body Length") +
+  theme_minimal()
+
+#females
+# Plot the relationship with a scatter plot
+ggplot(females, aes(x = `Latitude`, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(x = "Latitude", y = "Body Length (mm)",
+       title = "Females: Latitude vs. Body Length") +
+  theme_minimal()
+
+#females
+# Plot the relationship with a scatter plot
+ggplot(females, aes(x = `Altitude`, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(x = "Altitude", y = "Body Length (mm)",
+       title = "Females: Altitude vs. Body Length") +
+  theme_minimal()
+
+```
+
+
+Run linear models evaluating the effects of percent impervious surface and latitude on male body length. Use site code as a random effect. Include quadratic effects for %IP and Latitude as relationship between these variables and the dependent variable looks a little humped and regression diagnostics confirm. Latitude and percent impervious surface are scaled. 
+```{r}
+
+# Ensure the na.action is set to na.fail
+options(na.action = na.fail)
+
+#global model for 5 KM buffer zone
+M_nose_wing_5KM <- lmer(`Nose-To-Wing-Tip-(mm)` ~ scaledLAT + I(scaledLAT^2) + scaled_5KM + I(scaled_5KM^2) + (1|Site_Code), data=males, REML = FALSE)
+
+#view models
+summary(M_nose_wing_5KM)
+
+```
+
+Model selection and averaging using MuMIn.
+```{r}
+# Perform model selection using the dredge function
+dredge_results_M_IP <- dredge(M_nose_wing_5KM)
+
+# View the model selection table
+dredge_results_M_IP
+
+# Select the top models (e.g., with delta AICc < 2)
+top_models_M_IP <- get.models(dredge_results_M_IP, subset = delta < 2)
+
+# Perform model averaging
+model_average_M_IP <- model.avg(top_models_M_IP)
+
+# Summary of the model averaging results
+summary(model_average_M_IP)
+```
+
+Check for collinearity of predictors using car.
+```{r}
+#extract fixed effects from model
+vif_results_M_IP <- vif(lm(`Nose-To-Wing-Tip-(mm)` ~ scaledLAT + I(scaledLAT^2) + scaled_5KM + I(scaled_5KM^2), data = males))
+print(vif_results_M_IP)
+```
+
+Test model assumptions for best models. The global model was the best fit after averaging the models.
+```{r}
+#make DHarma qqplot
+M_best_model_resid_5KM <- simulateResiduals(M_nose_wing_5KM, plot = T, n = 10000)
+
+#view DHarma qqplot nplot 
+M_best_model_resid_5KM
+
+#check residuals against predictors
+plotResiduals(M_best_model_resid_5KM)
+plotResiduals(M_best_model_resid_5KM, form = males$scaled_5KM)
+plotResiduals(M_best_model_resid_5KM, form = males$scaledLAT)
+
+#test dispersion
+testDispersion(M_best_model_resid_5KM)
+testOutliers(M_best_model_resid_5KM, alternative = 'two.sided')
+outliers(M_best_model_resid_5KM)
+
+```
+
+Re-analyze without outliers to see how it affects results.
+
+First, remove the rows that contain the outliers.
+```{r}
+# Define the rows to remove
+rows_to_remove <- c(78, 227, 317, 444, 554)
+# Create the new data frame without the specified rows
+males_no_outliers <- males[-rows_to_remove, ]
+```
+
+Re-run LMMs.
+```{r}
+# Ensure the na.action is set to na.fail
+options(na.action = na.fail)
+
+#global model for 5 KM buffer zone
+M_nose_wing_5KM_no_outliers <- lmer(`Nose-To-Wing-Tip-(mm)` ~ scaledLAT + I(scaledLAT^2) + scaled_5KM + I(scaled_5KM^2) + (1|Site_Code), data=males_no_outliers, REML = FALSE)
+
+#view model
+summary(M_nose_wing_5KM_no_outliers)
+```
+
+
+# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
+
+#Analysis of Female SLF
+
+Run linear models evaluating the effects of percent impervious surface and latitude on female body length. Use site code as a random effect. Include quadratic effects for %IP and Latitude as relationship between these variables and the dependent variable looks a little humped and the original DHarma runs indicated missing quadratic terms. Latitude and percent impervious surface are scaled. 
+```{r}
+
+# Ensure the na.action is set to na.fail
+options(na.action = na.fail)
+
+#global model for 5 KM buffer zone
+F_nose_wing_5KM <- lmer(`Nose-To-Wing-Tip-(mm)` ~ scaledLAT + I(scaledLAT^2) + scaled_5KM + I(scaled_5KM^2) + (1 | Site_Code), data=females, REML = FALSE)
+
+#view models
+summary(F_nose_wing_5KM)
+
+```
+
+Model selection and averaging using MuMIn.
+```{r}
+# Perform model selection using the dredge function
+dredge_results_F_IP <- dredge(F_nose_wing_5KM)
+
+# View the model selection table
+dredge_results_F_IP
+
+# Select the top models (e.g., with delta AICc < 2)
+top_models_F_IP <- get.models(dredge_results_F_IP, subset = delta < 2)
+
+# Perform model averaging
+model_average_F_IP <- model.avg(top_models_F_IP)
+
+# Summary of the model averaging results
+summary(model_average_F_IP)
+```
+
+
+```{r}
+
+#make DHarma qqplot
+F_best_model_resid_5KM <- simulateResiduals(F_nose_wing_5KM, plot = T, n = 20000)
+#view DHarma qqplot nplot 
+
+#check residuals against predictors
+plotResiduals(F_best_model_resid_5KM)
+plotResiduals(F_best_model_resid_5KM, form = females$scaled_5KM)
+plotResiduals(F_best_model_resid_5KM, form = females$scaledLAT)
+#test dispersion
+testDispersion(F_best_model_resid_5KM)
+testOutliers(F_best_model_resid_5KM, alternative = 'two.sided')
+outliers(F_best_model_resid_5KM)
+
+
+```
+
+
+Check for collinearity of predictors using car.
+```{r}
+#extract fixed effects from model
+vif_results_F_IP <- vif(lm(`Nose-To-Wing-Tip-(mm)` ~ scaledLAT + I(scaledLAT^2) + scaled_5KM + I(scaled_5KM^2), data = females))
+print(vif_results_F_IP)
+```
+
+Re-analyze without outliers to see how it affects results.
+
+First, remove the rows that contain the outliers.
+```{r}
+# Define the rows to remove
+rows_to_remove_F <- c(294, 1059, 1069)
+# Create the new data frame without the specified rows
+females_no_outliers <- females[-rows_to_remove_F, ]
+
+```
+
+```{r}
+
+# Ensure the na.action is set to na.fail
+options(na.action = na.fail)
+
+#global model for 5 KM buffer zone
+F_nose_wing_5KM_no_outliers <- lmer(`Nose-To-Wing-Tip-(mm)` ~ scaledLAT + I(scaledLAT^2) + scaled_5KM + I(scaled_5KM^2) + (1 | Site_Code), data=females_no_outliers, REML = FALSE)
+
+
+#view models
+summary(F_nose_wing_5KM_no_outliers)
+
+```
+
+##Generate Plots 
+Plot relationship between % impervious surface (5 km buffer) and body length for females and males. 
+```{r}
+
+# Create a scatterplot for Females
+p_females <- ggplot(females, aes(x = scaled_5KM, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +  # Add the points
+  stat_smooth(method = "lm", formula = y ~ poly(x, 2), color = "red") +  # Add the regression line (quadratic)
+  labs(
+    x = "% Impervious Surface (scaled)",
+    y = "Body Length (mm)",
+    title = "Females"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),  # Center and increase title size
+    panel.grid = element_blank(),  # Remove grid lines
+    axis.text.x = element_text(size = 14),  # Increase x-axis tick label size
+    axis.text.y = element_text(size = 14),  # Increase y-axis tick label size
+    axis.title.x = element_text(size = 16),  # Increase x-axis title size
+    axis.title.y = element_text(size = 16),  # Increase y-axis title size
+    axis.line = element_line(color = "black"),  # Add axis lines
+    panel.background = element_rect(fill = "white", color = "white"),  # White panel background
+    plot.background = element_rect(fill = "white", color = "white")   # White plot background
+  )
+
+# Save the plot for Females
+ggsave("females_body_size_600dpi.png", plot = p_females, dpi = 600, width = 8, height = 6, units = "in")
+
+# Create a scatterplot for Males
+p_males <- ggplot(males, aes(x = scaled_5KM, y = `Nose-To-Wing-Tip-(mm)`)) +
+  geom_point() +  # Add the points
+  stat_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +  # Add the regression line (quadratic)
+  labs(
+    x = "% Impervious Surface (scaled)",
+    y = "Body Length (mm)",
+    title = "Males"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),  # Center and increase title size
+    panel.grid = element_blank(),  # Remove grid lines
+    axis.text.x = element_text(size = 14),  # Increase x-axis tick label size
+    axis.text.y = element_text(size = 14),  # Increase y-axis tick label size
+    axis.title.x = element_text(size = 16),  # Increase x-axis title size
+    axis.title.y = element_text(size = 16),  # Increase y-axis title size
+    axis.line = element_line(color = "black"),  # Add axis lines
+    panel.background = element_rect(fill = "white", color = "white"),  # White panel background
+    plot.background = element_rect(fill = "white", color = "white")   # White plot background
+  )
+
+# Save the plot for Males
+ggsave("males_body_size_600dpi.png", plot = p_males, dpi = 600, width = 8, height = 6, units = "in")
+
+
+```
+Calculate mean nose-to-wingtip length for most (>50% IP) and least (< 15% IP) urbanized areas for males and females.
+
+```{r}
+# Mean for %IP-5KM 50% or more
+mean_50_or_more_F <- mean(females$`Nose-To-Wing-Tip-(mm)`[females$`%IP-5KM` >= 50], na.rm = TRUE)
+
+# Mean for %IP-5KM 15% or less
+mean_15_or_less_F <- mean(females$`Nose-To-Wing-Tip-(mm)`[females$`%IP-5KM` <= 15], na.rm = TRUE)
+
+# Print the results
+cat("Mean Nose-To-Wing-Tip for %IP-5KM 50% or more:", mean_50_or_more_F, "mm\n")
+cat("Mean Nose-To-Wing-Tip for %IP-5KM 15% or less:", mean_15_or_less_F, "mm\n")
+
+# Calculate standard deviation for %IP-5KM 50% or more
+stddev_50_or_more_F <- sd(females$`Nose-To-Wing-Tip-(mm)`[females$`%IP-5KM` >= 50], na.rm = TRUE)
+
+# Calculate standard deviation for %IP-5KM 15% or less
+stddev_15_or_less_F <- sd(females$`Nose-To-Wing-Tip-(mm)`[females$`%IP-5KM` <= 15], na.rm = TRUE)
+
+# Perform t-test to compare means of two groups
+t_test_result_F <- t.test(
+  females$`Nose-To-Wing-Tip-(mm)`[females$`%IP-5KM` >= 50],
+  females$`Nose-To-Wing-Tip-(mm)`[females$`%IP-5KM` <= 15],
+  alternative = "two.sided",  # Two-tailed test
+  na.rm = TRUE
+)
+
+# Print the standard deviations
+cat("Standard deviation for %IP-5KM 50% or more:", stddev_50_or_more_F, "\n")
+cat("Standard deviation for %IP-5KM 15% or less:", stddev_15_or_less_F, "\n")
+
+# Print the t-test result
+print(t_test_result_F)
+
+
+
+
+
+
+
+# Mean for %IP-5KM 50% or more
+mean_50_or_more_M <- mean(males$`Nose-To-Wing-Tip-(mm)`[males$`%IP-5KM` >= 50], na.rm = TRUE)
+
+# Mean for %IP-5KM 15% or less
+mean_15_or_less_M <- mean(males$`Nose-To-Wing-Tip-(mm)`[males$`%IP-5KM` <= 15], na.rm = TRUE)
+
+# Print the results
+cat("Mean Nose-To-Wing-Tip for %IP-5KM 50% or more:", mean_50_or_more_M, "mm\n")
+cat("Mean Nose-To-Wing-Tip for %IP-5KM 15% or less:", mean_15_or_less_M, "mm\n")
+
+# Calculate standard deviation for %IP-5KM 50% or more
+stddev_50_or_more_M <- sd(males$`Nose-To-Wing-Tip-(mm)`[males$`%IP-5KM` >= 50], na.rm = TRUE)
+
+# Calculate standard deviation for %IP-5KM 15% or less
+stddev_15_or_less_M <- sd(males$`Nose-To-Wing-Tip-(mm)`[males$`%IP-5KM` <= 15], na.rm = TRUE)
+
+# Perform t-test to compare means of two groups
+t_test_result_M <- t.test(
+  males$`Nose-To-Wing-Tip-(mm)`[males$`%IP-5KM` >= 50],
+  males$`Nose-To-Wing-Tip-(mm)`[males$`%IP-5KM` <= 15],
+  alternative = "two.sided",  # Two-tailed test
+  na.rm = TRUE
+)
+
+# Print the standard deviations
+cat("Standard deviation for %IP-5KM 50% or more:", stddev_50_or_more_M, "\n")
+cat("Standard deviation for %IP-5KM 15% or less:", stddev_15_or_less_M, "\n")
+
+# Print the t-test result
+print(t_test_result_M)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Analysis of Thermal Tolerance Data
+Importing Data:
+```{r}
+h1 <- read_csv("/Users/brennalevine/Desktop/SLF_body_size_ICB_ms/Levine_et_al_heat_tolerance.csv")
+```
+
+Split the hot and cold data into male and female data sets.
+```{r}
+#Separating into male & female data sets
+#subset to male data
+hotmales <- h1 %>%
+  filter(`Sex(M/F)` == 'M') %>%
+  select(`ID`, `Length-Nosetoabdomen(mm)`, `Length-NosetoWingtip(mm)`, `AbdomenLength(mm)`, `Weight(g)`, `CTmax(s)`, `Temperature(C)`)
+
+#subset to female data
+hotfemales <- h1 %>%
+  filter(`Sex(M/F)` == 'F') %>%
+  select(`ID`, `Length-Nosetoabdomen(mm)`, `Length-NosetoWingtip(mm)`, `AbdomenLength(mm)`, `Weight(g)`, `CTmax(s)`, `Temperature(C)`)
+
+#log transform the response variable
+hotmales$`CTmax(s)LOG` <- log(hotmales$`CTmax(s)`)
+hotfemales$`CTmax(s)LOG` <- log(hotfemales$`CTmax(s)`)
+```
+
+Removing unreliable data/mismeasurements/data collection issues:
+```{r}
+#hotfemales
+rowsToRemove_hF <- c(2, 3, 4, 8) 
+hotfemalesRowsRemoved <- hotfemales[-rowsToRemove_hF, ]
+
+#hotmales
+rowsToRemove_hM <- c(2) 
+hotmalesRowsRemoved <- hotmales[-rowsToRemove_hM, ]
+```
+
+
+Calculate numbers of males and females per treatment:
+```{r}
+nrow(hotfemalesRowsRemoved)
+nrow(hotmalesRowsRemoved)
+```
+
+
+Compare body length and weight between males and females.
+```{r}
+# Load your data (replace with your actual file paths)
+males <- read.csv("hotmalesRowsRemoved.csv")
+females <- read.csv("hotfemalesRowsRemoved.csv")
+
+# T-test for Length-NosetoWingtip
+wingtip_ttest <- t.test(hotfemalesRowsRemoved$`Length-NosetoWingtip(mm)`, hotmalesRowsRemoved$`Length-NosetoWingtip(mm)`, var.equal = FALSE)
+print(wingtip_ttest)
+
+# T-test for Weight
+weight_ttest <- t.test(hotfemalesRowsRemoved$`Weight(g)`, hotmalesRowsRemoved$`Weight(g)`, var.equal = FALSE)
+print(weight_ttest)
+
+# Correlation between Length-NosetoWingtip and Weight
+male_corr <- cor.test(hotmalesRowsRemoved$`Length-NosetoWingtip(mm)`, hotmalesRowsRemoved$`Weight(g)`)
+female_corr <- cor.test(hotfemalesRowsRemoved$`Length-NosetoWingtip(mm)`, hotfemalesRowsRemoved$`Weight(g)`)
+print(male_corr)
+print(female_corr)
+
+# Assumptions check: Q-Q plots for normality
+par(mfrow=c(2, 2)) # Arrange plots in 2x2 grid
+
+# Q-Q plot for male wingtip length
+qqPlot(hotmalesRowsRemoved$`Length-NosetoWingtip(mm)`, main="Q-Q Plot: Male Wingtip Length")
+# Q-Q plot for female wingtip length
+qqPlot(hotfemalesRowsRemoved$`Length-NosetoWingtip(mm)`, main="Q-Q Plot: Female Wingtip Length")
+
+# Plot distributions
+ggplot() +
+  geom_histogram(data=hotmalesRowsRemoved, aes(x=`Length-NosetoWingtip(mm)`), fill="blue", alpha=0.5, bins=20) +
+  geom_histogram(data=hotfemalesRowsRemoved, aes(x=`Length-NosetoWingtip(mm)`), fill="red", alpha=0.5, bins=20) +
+  labs(title = "Body Length: Males vs Females", x = "Body Length (mm)", y = "Count")
+
+ggplot() +
+  geom_histogram(data=hotmalesRowsRemoved, aes(x=`Weight(g)`), fill="blue", alpha=0.5, bins=20) +
+  geom_histogram(data=hotfemalesRowsRemoved, aes(x=`Weight(g)`), fill="red", alpha=0.5, bins=20) +
+  labs(title = "Weight: Males vs Females", x = "Weight (g)", y = "Count")
+
+# Scatter plots for correlation
+ggplot(hotmalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y = `Weight(g)`)) +
+  geom_point(color = 'blue') +
+  labs(title = paste("Male Correlation: r =", round(male_corr$estimate, 2), ", p =", round(male_corr$p.value, 3)),
+       x = "Body Length (mm)", y = "Weight (g)")
+
+ggplot(hotfemalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y = `Weight(g)`)) +
+  geom_point(color = 'red') +
+  labs(title = paste("Female Correlation: r =", round(female_corr$estimate, 2), ", p =", round(female_corr$p.value, 3)),
+       x = "Length-NosetoWingtip (mm)", y = "Weight (g)")
+
+```
+
+```{r}
+
+# Calculate mean and standard deviation for weight and Nose-to-Wingtip length for males
+male_summary <- hotmalesRowsRemoved %>%
+  summarise(
+    Mean_Weight = mean(`Weight(g)`, na.rm = TRUE),
+    SD_Weight = sd(`Weight(g)`, na.rm = TRUE),
+    Mean_Length = mean(`Length-NosetoWingtip(mm)`, na.rm = TRUE),
+    SD_Length = sd(`Length-NosetoWingtip(mm)`, na.rm = TRUE)
+  )
+
+# Calculate mean and standard deviation for weight and Nose-to-Wingtip length for females
+female_summary <- hotfemalesRowsRemoved %>%
+  summarise(
+    Mean_Weight = mean(`Weight(g)`, na.rm = TRUE),
+    SD_Weight = sd(`Weight(g)`, na.rm = TRUE),
+    Mean_Length = mean(`Length-NosetoWingtip(mm)`, na.rm = TRUE),
+    SD_Length = sd(`Length-NosetoWingtip(mm)`, na.rm = TRUE)
+  )
+
+# Print the summaries
+print(male_summary)
+
+print(female_summary)
+
+
+```
+
+
+Test effect of body length on CTmax.
+```{r}
+# Load necessary libraries
+library(lmtest)
+
+# Plot for males
+male_plot <- ggplot(hotmalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y = `CTmax(s)`)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  labs(
+    title = "Males",
+    x = "Body Length (mm)",
+    y = expression(paste("Time to CT"["max"], " (s)"))
+  ) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+# Save the male plot as a PNG file with 600 DPI
+ggsave("male_heat_tolerance_600dpi.png", plot = male_plot, dpi = 600, width = 8, height = 6, units = "in")
+
+# Plot for females
+female_plot <- ggplot(hotfemalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y = `CTmax(s)`)) +
+  geom_point(color = "red") +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  labs(
+    title = "Females",
+    x = "Body Length (mm)",
+    y = expression(paste("Time to CT"["max"], " (s)"))
+  ) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+# Save the female plot as a PNG file with 600 DPI
+ggsave("female_heat_tolerance_600dpi.png", plot = female_plot, dpi = 600, width = 8, height = 6, units = "in")
+
+# ---- Model Assumptions ----
+
+# 1. Normality of Residuals: Q-Q plot and Shapiro-Wilk test
+par(mfrow = c(2, 2))  # Arrange plots in 2x2 grid
+
+# Q-Q plot for male residuals
+qqPlot(male_lm_nose, main = "Q-Q Plot: Male Residuals")
+shapiro_test_male_nose <- shapiro.test(residuals(male_lm_nose))
+cat("Shapiro-Wilk Test for Male Residuals: W =", shapiro_test_male_nose$statistic, ", p =", shapiro_test_male_nose$p.value, "\n")
+
+# Q-Q plot for female residuals
+qqPlot(female_lm_nose, main = "Q-Q Plot: Female Residuals")
+shapiro_test_female_nose <- shapiro.test(residuals(female_lm_nose))
+cat("Shapiro-Wilk Test for Female Residuals: W =", shapiro_test_female_nose$statistic, ", p =", shapiro_test_female_nose$p.value, "\n")
+
+# 2. Homoscedasticity: Residuals vs Fitted plot and Breusch-Pagan test
+
+# Residuals vs Fitted for males
+plot(male_lm_nose, which = 1, main = "Residuals vs Fitted: Male")
+bptest_male_nose <- bptest(male_lm_nose)
+cat("Breusch-Pagan Test for Male Residuals: p =", bptest_male_nose$p.value, "\n")
+
+# Residuals vs Fitted for females
+plot(female_lm_nose, which = 1, main = "Residuals vs Fitted: Female")
+bptest_female_nose <- bptest(female_lm_nose)
+cat("Breusch-Pagan Test for Female Residuals: p =", bptest_female_nose$p.value, "\n")
+
+
+```
+
+
+
+Test effect of weight on CTmax.
+```{r}
+
+# Linear regression for males
+male_lm_weight <- lm(`CTmax(s)` ~ `Weight(g)`, data = hotmalesRowsRemoved)
+
+# Linear regression for females
+female_lm_weight <- lm(`CTmax(s)` ~ `Weight(g)`, data = hotfemalesRowsRemoved)
+
+# Plot for males with centered title and custom axis title for Time to CTmax (with CTmax as a subscript)
+ggplot(hotmalesRowsRemoved, aes(x = `Weight(g)`, y = `CTmax(s)`)) +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  labs(title = "Males", 
+       x = "Weight (g)", 
+       y = expression(paste("Time to CT", max, "(s)"))) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+# Plot for females with centered title and custom axis title for Time to CTmax (with CTmax as a subscript)
+ggplot(hotfemalesRowsRemoved, aes(x = `Weight(g)`, y = `CTmax(s)`)) +
+  geom_point(color = "red") +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  labs(title = "Females", 
+       x = "Weight (g)", 
+       y = expression(paste("Time to CT", max, "(s)"))) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+# ---- Model Assumptions ----
+
+# 1. Normality of Residuals: Q-Q plot and Shapiro-Wilk test
+par(mfrow = c(2, 2))  # Arrange plots in 2x2 grid
+
+# Q-Q plot for male residuals
+qqPlot(male_lm_weight, main = "Q-Q Plot: Male Residuals")
+shapiro_test_male <- shapiro.test(residuals(male_lm_weight))
+cat("Shapiro-Wilk Test for Male Residuals: W =", shapiro_test_male$statistic, ", p =", shapiro_test_male$p.value, "\n")
+
+# Q-Q plot for female residuals
+qqPlot(female_lm_weight, main = "Q-Q Plot: Female Residuals")
+shapiro_test_female <- shapiro.test(residuals(female_lm_weight))
+cat("Shapiro-Wilk Test for Female Residuals: W =", shapiro_test_female$statistic, ", p =", shapiro_test_female$p.value, "\n")
+
+# 2. Homoscedasticity: Residuals vs Fitted plot and Breusch-Pagan test
+
+# Residuals vs Fitted for males
+plot(male_lm_weight, which = 1, main = "Residuals vs Fitted: Male")
+bptest_male <- bptest(male_lm_weight)
+cat("Breusch-Pagan Test for Male Residuals: p =", bptest_male$p.value, "\n")
+
+# Residuals vs Fitted for females
+plot(female_lm_weight, which = 1, main = "Residuals vs Fitted: Female")
+bptest_female <- bptest(female_lm_weight)
+cat("Breusch-Pagan Test for Female Residuals: p =", bptest_female$p.value, "\n")
+
+
+```
+
+
+
+
+
+
+
+
+
