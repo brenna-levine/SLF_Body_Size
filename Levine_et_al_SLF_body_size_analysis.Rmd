@@ -469,6 +469,17 @@ p_males <- ggplot(males, aes(x = scaled_5KM, y = `Nose-To-Wing-Tip-(mm)`)) +
 # Save the plot for Males
 ggsave("males_body_size_600dpi.png", plot = p_males, dpi = 600, width = 8, height = 6, units = "in")
 
+# Load the patchwork package
+library(patchwork)
+
+# Combine the plots side by side
+combined_plot <- p_females + p_males + 
+  plot_layout(ncol = 2)  # Arrange in a single row with 2 columns
+
+# Save the combined plot as a single image
+ggsave("combined_body_size_600dpi.png", plot = combined_plot, dpi = 600, width = 16, height = 6, units = "in")
+
+
 
 ```
 Calculate mean nose-to-wingtip length for most (>50% IP) and least (< 15% IP) urbanized areas for males and females.
@@ -686,6 +697,12 @@ Test effect of body length on CTmax.
 # Load necessary libraries
 library(lmtest)
 
+# Linear regression for males with Nose-to-Wingtip as predictor
+male_lm_nose <- lm(`CTmax(s)` ~ `Length-NosetoWingtip(mm)`, data = hotmalesRowsRemoved)
+
+# Linear regression for females with Nose-to-Wingtip as predictor
+female_lm_nose <- lm(`CTmax(s)` ~ `Length-NosetoWingtip(mm)`, data = hotfemalesRowsRemoved)
+
 # Plot for males
 male_plot <- ggplot(hotmalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y = `CTmax(s)`)) +
   geom_point(color = "blue") +
@@ -696,10 +713,13 @@ male_plot <- ggplot(hotmalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y =
     y = expression(paste("Time to CT"["max"], " (s)"))
   ) +
   theme_classic() +
-  theme(plot.title = element_text(hjust = 0.5))  # Center the title
-
-# Save the male plot as a PNG file with 600 DPI
-ggsave("male_heat_tolerance_600dpi.png", plot = male_plot, dpi = 600, width = 8, height = 6, units = "in")
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),  # Title size 18
+    axis.text.x = element_text(size = 14),  # X-axis tick label size 14
+    axis.text.y = element_text(size = 14),  # Y-axis tick label size 14
+    axis.title.x = element_text(size = 16),  # X-axis title size 16
+    axis.title.y = element_text(size = 16)   # Y-axis title size 16
+  )
 
 # Plot for females
 female_plot <- ggplot(hotfemalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`, y = `CTmax(s)`)) +
@@ -711,10 +731,24 @@ female_plot <- ggplot(hotfemalesRowsRemoved, aes(x = `Length-NosetoWingtip(mm)`,
     y = expression(paste("Time to CT"["max"], " (s)"))
   ) +
   theme_classic() +
-  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),  # Title size 18
+    axis.text.x = element_text(size = 14),  # X-axis tick label size 14
+    axis.text.y = element_text(size = 14),  # Y-axis tick label size 14
+    axis.title.x = element_text(size = 16),  # X-axis title size 16
+    axis.title.y = element_text(size = 16)   # Y-axis title size 16
+  )
 
-# Save the female plot as a PNG file with 600 DPI
-ggsave("female_heat_tolerance_600dpi.png", plot = female_plot, dpi = 600, width = 8, height = 6, units = "in")
+# Combine the plots side by side
+combined_plot <- male_plot + female_plot +
+  plot_layout(ncol = 2)  # Arrange in a single row with 2 columns
+
+# Save the combined plot as a single image
+ggsave("combined_heat_tolerance_600dpi.png", plot = combined_plot, dpi = 600, width = 16, height = 6, units = "in")
+
+# Save the combined plot as a single image
+ggsave("combined_heat_tolerance_600dpi.png", plot = combined_plot, dpi = 600, width = 16, height = 6, units = "in")
+
 
 # ---- Model Assumptions ----
 
@@ -776,6 +810,9 @@ ggplot(hotfemalesRowsRemoved, aes(x = `Weight(g)`, y = `CTmax(s)`)) +
        y = expression(paste("Time to CT", max, "(s)"))) +
   theme_classic() +
   theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+
+
 
 # ---- Model Assumptions ----
 
